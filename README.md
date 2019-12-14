@@ -16,7 +16,7 @@ The final project was concluded with one Shiny application and a Pitch using R-P
 
 Links to evaluate the Project
 
-* The Milestone Project from Week two can be foun in this link:  [Milestone Project]()
+* The Milestone Project from Week two can be foun in this link:  [Milestone Project](http://rpubs.com/AnnetteS/capstone-milestone-report)
 
 * The Word Prediction App can be found on shinyapps.io:
 [Shine App]()
