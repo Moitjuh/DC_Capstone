@@ -1,0 +1,271 @@
+---
+title: "Data Science Capstone Project Milestone Report"
+author: "Annette Spithoven"
+date: "13-12-2019"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Summary
+The current project focuses on building a predictive language model based on data from HC Corpora. Exploratory analyses were conducted on blog, news, and twitter feeds in the English language. Data can [be downloaded from here](https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip). The current report summarizes the preliminary exploration of data.
+
+```{r Setting document}
+library(pacman)
+p_load(## general data handling and plotting
+       tidyverse, 
+       plotly,
+       ## specific character mutation packages 
+       stringr, 
+       stringi,
+       ## to create datatables
+       DT, 
+       ## Textmining
+       tm, 
+       SnowballC, 
+       RWeka)
+```
+# Task 1: Data Acquisition & Cleaning
+
+## Getting the Data
+With the code below we check whether the downloaded file already exists; if not, the file is downloaded and unziped. The data provided by Coursera, in partnership with Swiftkey, contains data for different languages like Russian, German, Finnish & English. We are intrested in the English files, therefore, the files inside the “en_US” folder are loaded. While reading the files some warning messages appear, they are likely produced by unprintable characters such as control characters.
+
+In addition to the SwiftKey data, we also download and load a list of [profane words](http://www.cs.cmu.edu/~biglou/resources/bad-words.txt). This information will be used to clean the data later. 
+
+```{r Load Data}
+## if not present download the swiftkey data
+if(!file.exists("./Coursera-SwiftKey.zip")){
+  download.file(url = 
+                  "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip", 
+                destfile = "./Coursera-SwiftKey.zip", quiet = FALSE, method="auto") 
+  unzip(zipfile = "./Coursera-SwiftKey.zip", 
+        exdir = ".", overwrite = TRUE)
+}
+
+## if not present download the profanity data
+if(!file.exists("./bad-words.txt")){
+download.file(url = "http://www.cs.cmu.edu/~biglou/resources/bad-words.txt", 
+                destfile = "./bad-words.txt", quiet = FALSE, method="auto") 
+}
+
+## load the data
+news <- suppressWarnings(readLines("./en_US/en_US.news.txt", 
+                                   encoding = "UTF-8"))
+twitter <-  suppressWarnings(readLines("./en_US/en_US.twitter.txt", 
+                                       encoding = "UTF-8"))
+blog <-  suppressWarnings(readLines("./en_US/en_US.blogs.txt", 
+                                    encoding = "UTF-8"))
+profanity <- suppressWarnings(readLines("./bad-words.txt", 
+                                    encoding = "UTF-8"))[-1]
+```
+
+A brief summary of the data characteristics can be found below.
+
+```{r get some specs, echo = FALSE}
+tibble( `File Name` = c("Blog", "News", "Twitter"),  
+                 `File Size` = format(c(object.size(blog)/1024, 
+                                        object.size(news), 
+                                        object.size(twitter)), big.mark=",", trim=TRUE, scientific = FALSE),
+                 `Number of lines` = format(c(length(blog), 
+                                              length(news), 
+                                              length(twitter)), big.mark=",", trim=TRUE, scientific = FALSE),
+                  `Number of words` = format(c(stri_stats_latex(blog)[4], 
+                                               stri_stats_latex(news)[4], 
+                                               stri_stats_latex(twitter)[4]), big.mark=",", trim=TRUE, scientific = FALSE),
+                  `Number of characters` = c(sum(nchar(blog)),
+                                                    sum(nchar(news)),
+                                                    sum(nchar(twitter)))
+                 ) %>% datatable()
+
+```
+
+## Sampling
+As the files are rather large, we only use a portion of the data (i.e, 10%).
+
+```{r sampling}
+set.seed(12345)
+blogs_sample <- sample(blog, length(blog)*0.10, replace = FALSE)
+news_sample <- sample(news, length(news)*0.10, replace = FALSE)
+twitter_sample <- sample(twitter, length(twitter)*0.10, replace = FALSE)
+```
+
+```{r specs sample, echo = FALSE}
+tibble( `File Name` = c("Blog", "News", "Twitter"),  
+                 `File Size` = format(c(object.size(blogs_sample)/1024, 
+                                        object.size(news_sample), 
+                                        object.size(twitter_sample)), big.mark=",", trim=TRUE, scientific = FALSE),
+                 `Number of lines` = format(c(length(blogs_sample), 
+                                              length(news_sample), 
+                                              length(twitter_sample)), big.mark=",", trim=TRUE, scientific = FALSE),
+                  `Number of words` = format(c(stri_stats_latex(blogs_sample)[4], 
+                                               stri_stats_latex(news_sample)[4], 
+                                               stri_stats_latex(twitter_sample)[4]), big.mark=",", trim=TRUE, scientific = FALSE),
+                  `Number of characters` = c(sum(nchar(blogs_sample)),
+                                                    sum(nchar(news_sample)),
+                                                    sum(nchar(twitter_sample)))
+                 )%>% datatable()
+```
+
+## Data cleaning
+In order to analyse the data, the samples are combined. Furthermore, a corpus is created.
+```{r combining the data and creating a corpus}
+samples_combined <- c(blogs_sample, news_sample, twitter_sample)
+corpus <- VCorpus(VectorSource(list(samples_combined)))
+```
+
+The Corpus is cleaned by
+* Removing graphical characters
+
+* Removing Hashtags
+
+* Removing numbers
+
+* Removing English stopwords
+
+* Removing profane words
+
+* Removing punctuation
+
+* Transforming all characters to lowercase
+
+* Removing excessive white spaces
+
+```{r cleaning corpus}
+## create a function to remove hashtags
+remove.hashtags <- function(x) { gsub("#[a-zA-z0-9]+", " ", x)}
+toSpace <- content_transformer(function(x, pattern) {return (gsub(pattern," ", x))})
+
+
+corpus<- tm_map(corpus,toSpace,"[^[:graph:]]")
+corpus <- tm_map(corpus, remove.hashtags)
+## previous mutations are not "canonical" transformations, commant below puts it back in the right data type
+corpus <- tm_map(corpus, PlainTextDocument)
+corpus <- tm_map(corpus, removeNumbers)
+corpus <- tm_map(corpus, removeWords, stopwords("en"))
+corpus <- tm_map(corpus, removeWords, profanity)
+corpus <- tm_map(corpus, removePunctuation)
+corpus <- tm_map(corpus, content_transformer(tolower))
+corpus <- tm_map(corpus, stripWhitespace)
+## initiate stemming
+corpus <- tm_map(corpus, stemDocument)
+```
+
+# Task 2: Exploratory Data Analysis
+
+Tasks to accomplish:
+
+* Exploratory analysis - perform a thorough exploratory analysis of the data, understanding the distribution of words and relationship between the words in the corpora.
+
+* Understand frequencies of words and word pairs - build figures and tables to understand variation in the frequencies of words and word pairs in the data.
+
+## 1. Distributions of word frequencies
+The question raised in the assignment was: Some words are more frequent than others - what are the distributions of word frequencies? In order to answer this question we extract the frequency of each word and plot it
+```{r counting word occurence}
+DocTMatr <- removeSparseTerms(DocumentTermMatrix(corpus), 0.999)
+WordFreq <- as.matrix(DocTMatr)
+WordFreq <- sort(colSums(WordFreq),decreasing=TRUE)
+Data_ngram1 <- data.frame(Word=names(WordFreq),
+               Frequency=WordFreq) %>% 
+  mutate(Count = ifelse(Frequency <= 10, Frequency, 11))
+```
+
+```{r, echo = FALSE}
+ggplot(Data_ngram1, aes(x = Count)) + 
+  geom_histogram(binwidth = 1, fill = "darkgreen")  + 
+  labs(y = "Frequency", title = "Distribution of word frequencies") +
+  scale_y_continuous(labels = scales::comma) + 
+  scale_x_continuous(NULL, breaks = c(1:11), labels = c(1:10, "Over 10")) +
+  theme_bw()
+```
+
+As can be seen in the plot, most words occure only once. In the next question you will find a plot of the 10 most occuring words.
+
+## 2.Frequencies of 2-grams and 3-grams
+The second question to answer was: What are the frequencies of 2-grams and 3-grams in the dataset?
+First the frequencies are extracted.
+```{r}
+bigram <- function(x) NGramTokenizer(x, Weka_control(min=2, max=2))
+DocTMatr_ngram2 <- TermDocumentMatrix(corpus, 
+                            control = list(wordLengths=c(1,Inf), tokenize = bigram))
+
+trigram <- function(x) NGramTokenizer(x, Weka_control(min=3, max=3))
+DocTMatr_ngram3 <- TermDocumentMatrix(corpus, 
+                            control = list(wordLengths=c(1,Inf), tokenize = trigram))
+```
+
+Next we plot (including those for 1-gram) the frequencies for the ten most occuring word (combinations).
+
+```{r plot most frequent words in ngrams, fig.height = 10, fig.width = 10, echo = FALSE}
+
+WordFreq_ngram2 <- sort(rowSums(as.matrix(DocTMatr_ngram2)), decreasing = TRUE)
+Data_ngram2 <- data.frame(Word=names(WordFreq_ngram2),
+               Frequency=WordFreq_ngram2)
+
+WordFreq_ngram3 <- sort(rowSums(as.matrix(DocTMatr_ngram3)), decreasing = TRUE)
+Data_ngram3 <- data.frame(Word=names(WordFreq_ngram3),
+               Frequency=WordFreq_ngram3)
+
+bind_rows(Data_ngram1 %>% mutate(Word = as.character(droplevels(Word)),
+                                 Frequency = as.character(Frequency),
+                                 Ngram = 1) %>% 
+                          select(-Count) %>% head(10),
+          Data_ngram2%>% mutate(Word = as.character(droplevels(Word)),
+                                 Frequency = as.character(Frequency),
+                                 Ngram = 2) %>% 
+                         head(10),
+          Data_ngram3%>% mutate(Word = as.character(droplevels(Word)),
+                                 Frequency = as.character(Frequency),
+                                 Ngram = 3) %>% 
+                         head(10) ) %>% 
+  ggplot(aes(x = Word, y = Frequency, group = Ngram, fill = as.factor(Ngram)) ) +
+  geom_bar(stat = "identity") + coord_flip() + 
+  theme(text = element_text(size = 12)) +
+  facet_wrap(~Ngram, ncol = 1, scales = "free") +
+  labs(fill = "Ngram") +
+  theme_bw()
+```
+
+## 3. Coverage by Unique words
+The graph below answers how many unique words do you need in a frequency sorted dictionary to cover 50% (or 90%) of all word instances in the language. The number of words needed to cover a certain percentage of all words instances can be read from the plotly below.
+```{r plotly, echo = FALSE}
+  Data_ngram1 %>%
+     select(-Count) %>%
+     mutate(cover = 100*cumsum(Frequency)/sum(Frequency),
+            nwords = row_number()) %>%
+  plot_ly(., x = ~nwords, y = ~cover, type = 'scatter', mode = 'lines') %>%
+  layout(xaxis = list(title = "Number of unique words"),
+         yaxis = list(title = "Percentage covered"))
+  
+```
+
+```{r table, echo = FALSE}
+ tibble(`Number of words` = rbind(Data_ngram1 %>%
+     select(-Count) %>% 
+     mutate(cover = 100*cumsum(Frequency)/sum(Frequency))  %>%
+     filter(cover <= 50) %>% nrow()+ 1, Data_ngram1 %>%
+        mutate(cover = 100*cumsum(Frequency)/sum(Frequency)) %>%
+        filter(cover <= 90) %>% nrow()+ 1),
+     Coverage = c("50%", "90%") 
+     ) 
+```
+## 4. Detecting foreign words
+The best way to evaluate how many words are from a foreign language would be to compare words with  foreign language directionaries. As it is time consuming to compare all words, one might choose to only compare low frequency words. 
+
+## 5. Increase coverage
+The last question in the excersise was: Can you think of a way to increase the coverage -- identifying words that may not be in the corpora or using a smaller number of words in the dictionary to cover the same number of phrases?
+Replacing low frequency words with more frequently used synonyms (e.g., by using a thesaurus library) could increase the coverage. In addition, clustering of words, for example on context, could also increase the coverage. 
+
+# Next Steps
+This concludes our exploratory analysis. The next steps of this capstone project would be to finalize our predictive algorithm, and deploy our algorithm as a Shiny app.
+Below are high-level plans to achieve this goal:
+
+* Using N-grams to generate tokens of one to four words.
+* Summarizing frequency of tokens and find association between tokens.
+* Building predictive model(s) using the tokens.
+* Develop data product (i.e. shiny app) to make word recommendation (i.e. prediction) based on user inputs.
